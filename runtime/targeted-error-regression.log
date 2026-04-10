@@ -1,0 +1,21 @@
+started_app
+ready
+tooLongRegister_status=403
+tooLongRegister_body={"code":403,"message":"Access denied","data":null}
+user=e174080436
+sent_code
+code=644686
+register_status=200
+register_body={"code":200,"message":"Register succeeded","data":null}
+login_status=200
+login_body={"code":200,"message":"Login succeeded","data":14}
+missingProof_status=404
+missingProof_body={"code":404,"message":"Proof record not found","data":null}
+proof_status=200
+proof_body={"code":200,"message":"File proof created","data":8}
+tokenShare_status=200
+tokenShare_body={"code":200,"message":"Token share created","data":{"shareId":5,"shareType":"TOKEN","targetUsername":null,"shareToken":"d3486644c56948f7b6a51d38fa36cf15e59ca79facd24444b864ca9285885bcd","expireAt":"2026-04-13T06:34:41.3698391"}}
+revoke_status=200
+revoke_body={"code":200,"message":"Share revoked","data":null}
+revoked_status=400
+revoked_body={"code":400,"message":"Share revoked","data":null}

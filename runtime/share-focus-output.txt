@@ -1,0 +1,19 @@
+proof_create_status=200
+proof_create_body={"code":200,"message":"File proof created","data":7}
+user_share_create_status=200
+user_share_create_body={"code":200,"message":"User share created","data":{"shareId":3,"shareType":"USER","targetUsername":"s27213023653","shareToken":null,"expireAt":"2026-04-13T06:02:10.9017598"}}
+user_share_detail_status=200
+user_share_detail_body={"code":200,"message":"Query succeeded","data":{"shareId":3,"shareType":"USER","targetUsername":"s27213023653","shareToken":null,"expireAt":"2026-04-13T06:02:10.90176","revoked":false,"proof":{"id":7,"ownerUsername":"s17212957717","subject":"share proof","contentType":"FILE","textContent":null,"originalFilename":"share-file.txt","fileSize":23,"mimeType":"text/plain","contentHash":"ce323c651a035caed4829191900d3f6c10358fb87c6c8af19b46b718560fa662","createdAt":"2026-04-10T06:02:10.770765","updatedAt":"2026-04-10T06:02:10.770765","rfc3161Status":"NONE","rfc3161Provider":"OFF","rfc3161TimestampAt":null}}}
+user_share_download_status=200
+user_share_download_body=share file content
+
+token_share_create_status=200
+token_share_create_body={"code":200,"message":"Token share created","data":{"shareId":4,"shareType":"TOKEN","targetUsername":null,"shareToken":"15305df1bcb747f28fe922d15b508df88846aa3f32d04df7938e9e91dffd0e0b","expireAt":"2026-04-13T06:02:11.1107585"}}
+token_share_revoke_status=200
+token_share_revoke_body={"code":200,"message":"Share revoked","data":null}
+revoked_token_detail_status=400
+revoked_token_detail_body={"code":400,"message":"分享已撤销","data":null}
+proof_delete_status=200
+proof_delete_body={"code":200,"message":"Proof deleted","data":null}
+after_delete_user_share_status=404
+after_delete_user_share_body={"code":404,"message":"分享记录不存�?,"data":null}
