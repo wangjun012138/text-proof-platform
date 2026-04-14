@@ -64,6 +64,9 @@ public class TextProof {
     @Column(nullable = false)
     private boolean deleted = false;
 
+    @Column(name = "version_no", nullable = false)
+    private Integer versionNo = 1;
+
     @PrePersist
     public void prePersist() {
         LocalDateTime now = LocalDateTime.now();

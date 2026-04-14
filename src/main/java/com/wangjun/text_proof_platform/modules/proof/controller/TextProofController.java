@@ -5,6 +5,7 @@ import com.wangjun.text_proof_platform.modules.proof.dto.CreateTextProofRequest;
 import com.wangjun.text_proof_platform.modules.proof.dto.TextProofDetailResponse;
 import com.wangjun.text_proof_platform.modules.proof.dto.TextProofListItemResponse;
 import com.wangjun.text_proof_platform.modules.proof.dto.UpdateTextProofRequest;
+import com.wangjun.text_proof_platform.modules.proof.entity.TextProofAudit;
 import com.wangjun.text_proof_platform.modules.proof.service.TextProofService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
@@ -131,11 +132,17 @@ public class TextProofController {
         textProofService.deleteProof(id, username);
         return ApiResponse.success("Proof deleted");
     }
-
+    //查看某条存证的历史版本
+    @GetMapping("/{id}/history")
+    public ApiResponse<List<TextProofAudit>> getHistory(@PathVariable Long id, Principal principal) {
+        String username = requireUsername(principal);
+        return ApiResponse.success("Query succeeded", textProofService.getProofHistory(id, username));
+    }
     private String requireUsername(Principal principal) {
         if (principal == null) {
             throw new BadCredentialsException("Not logged in");
         }
         return principal.getName();
     }
+
 }

@@ -5,6 +5,8 @@ import com.wangjun.text_proof_platform.common.ResourceNotFoundException;
 import com.wangjun.text_proof_platform.modules.proof.dto.TextProofDetailResponse;
 import com.wangjun.text_proof_platform.modules.proof.dto.TextProofListItemResponse;
 import com.wangjun.text_proof_platform.modules.proof.entity.TextProof;
+import com.wangjun.text_proof_platform.modules.proof.entity.TextProofAudit;
+import com.wangjun.text_proof_platform.modules.proof.repository.TextProofAuditRepository;
 import com.wangjun.text_proof_platform.modules.proof.repository.TextProofRepository;
 import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Service;
@@ -14,6 +16,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 import com.wangjun.text_proof_platform.modules.share.repository.TextProofShareRepository;
 import java.io.IOException;
+import java.time.LocalDateTime;
 import java.util.List;
 
 @Service
@@ -23,18 +26,21 @@ public class TextProofService {
     private final ProofHashService proofHashService;
     private final ProofStorageService proofStorageService;
     private final Rfc3161TimestampService rfc3161TimestampService;
-
     private final TextProofShareRepository textProofShareRepository;
+    private final TextProofAuditRepository textProofAuditRepository;
     public TextProofService(TextProofRepository textProofRepository,
                             ProofHashService proofHashService,
                             ProofStorageService proofStorageService,
                             Rfc3161TimestampService rfc3161TimestampService,
-                            TextProofShareRepository textProofShareRepository) {
+                            TextProofShareRepository textProofShareRepository,
+                            TextProofAuditRepository textProofAuditRepository
+    ) {
         this.textProofRepository = textProofRepository;
         this.proofHashService = proofHashService;
         this.proofStorageService = proofStorageService;
         this.rfc3161TimestampService = rfc3161TimestampService;
         this.textProofShareRepository = textProofShareRepository;
+        this.textProofAuditRepository = textProofAuditRepository;
     }
     //创建短文本存证
     @Transactional
@@ -51,8 +57,9 @@ public class TextProofService {
         //调时间戳服务
         TimestampResult timestampResult = rfc3161TimestampService.timestamp(digest);
         applyTimestampResult(proof, timestampResult);
-
+        proof.setVersionNo(1);
         textProofRepository.save(proof);
+        saveAuditSnapshot(proof, "CREATED");
         return proof.getId();
     }
     //创建文件存证
@@ -132,7 +139,12 @@ public class TextProofService {
         TimestampResult timestampResult = rfc3161TimestampService.timestamp(digest);
         applyTimestampResult(proof, timestampResult);
 
+
         textProofRepository.saveAndFlush(proof);
+
+        //存证版本更新
+        proof.setVersionNo(proof.getVersionNo() + 1);
+        saveAuditSnapshot(proof, "UPDATED");
 
         if (oldWasFile) {
             proofStorageService.deleteStoredFile(oldFilePath);
@@ -168,7 +180,9 @@ public class TextProofService {
             applyTimestampResult(proof, timestampResult);
 
             textProofRepository.saveAndFlush(proof);
-
+            //存证版本更新
+            proof.setVersionNo(proof.getVersionNo() + 1);
+            saveAuditSnapshot(proof, "UPDATED");
             // 3. 数据库成功后，再删旧文件
             if (oldWasFile) {
                 proofStorageService.deleteStoredFile(oldFilePath);
@@ -186,6 +200,10 @@ public class TextProofService {
     @Transactional
     public void deleteProof(Long id, String ownerUsername) {
         TextProof proof = getOwnedProof(id, ownerUsername);
+
+        // 删除前先记录一条删除审计
+        saveAuditSnapshot(proof, "DELETED");
+
         // 先删分享记录，保证原存证删掉后分享自动失效
         textProofShareRepository.deleteAllByTextProofId(id);
         //如果是文件型，会先删磁盘文件，再删数据库记录。
@@ -195,6 +213,41 @@ public class TextProofService {
 
         textProofRepository.delete(proof);
     }
+    //查看历史版本
+    @Transactional(readOnly = true)
+    public List<TextProofAudit> getProofHistory(Long id, String ownerUsername) {
+        // 先确认这条 proof 属于当前用户
+        getOwnedProof(id, ownerUsername);
+
+        return textProofAuditRepository
+                .findAllByProofIdAndOwnerUsernameOrderByVersionNoAsc(id, ownerUsername);
+    }
+    //保存审计快照
+    private void saveAuditSnapshot(TextProof proof, String action) {
+        TextProofAudit audit = new TextProofAudit();
+        audit.setProofId(proof.getId());
+        audit.setOwnerUsername(proof.getOwnerUsername());
+        audit.setSubject(proof.getSubject());
+        audit.setContentType(proof.getContentType());
+        audit.setTextContent(proof.getTextContent());
+        audit.setFilePath(proof.getFilePath());
+        audit.setOriginalFilename(proof.getOriginalFilename());
+        audit.setFileSize(proof.getFileSize());
+        audit.setMimeType(proof.getMimeType());
+        audit.setContentHash(proof.getContentHash());
+        audit.setVersionNo(proof.getVersionNo());
+        audit.setAuditAction(action);
+        audit.setProofCreatedAt(proof.getCreatedAt());
+        audit.setProofUpdatedAt(proof.getUpdatedAt());
+        audit.setAuditedAt(LocalDateTime.now());
+        audit.setRfc3161Status(proof.getRfc3161Status());
+        audit.setRfc3161Provider(proof.getRfc3161Provider());
+        audit.setRfc3161TimestampAt(proof.getRfc3161TimestampAt());
+
+        textProofAuditRepository.save(audit);
+    }
+
+
     //统一封装“按 id + 当前用户查记录”的逻辑
     private TextProof getOwnedProof(Long id, String ownerUsername) {
         return textProofRepository.findByIdAndOwnerUsername(id, ownerUsername)
@@ -242,4 +295,5 @@ public class TextProofService {
     //把原文件名、文件类型、文件本体这三个相关信息封装成一个新的对象，方便方法一次性返回。
     public record DownloadedFile(String originalFilename, String mimeType, Resource resource) {
     }
+
 }
