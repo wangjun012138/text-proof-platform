@@ -36,7 +36,7 @@ public class ProofStorageService {
 
     public StoredFile store(MultipartFile file) throws IOException {
         if (file == null || file.isEmpty()) {
-            throw new BadRequestException("上传文件不能为空");
+            throw new BadRequestException("File path cannot be empty");
         }
 
         Path root = getRootPath();
@@ -58,7 +58,7 @@ public class ProofStorageService {
         Path target = root.resolve(storedName).normalize();
         //防止路径穿越,防止攻击者想构造路径跳出去。
         if (!target.startsWith(root)) {
-            throw new BadRequestException("非法文件路径");
+            throw new BadRequestException("Invalid file path");
         }
         //文件读取到内存中，方便计算哈希
         byte[] bytes = file.getBytes();
@@ -101,11 +101,11 @@ public class ProofStorageService {
 
             Resource resource = new UrlResource(filePath.toUri());
             if (!resource.exists() || !resource.isReadable()) {
-                throw new BadRequestException("文件不存在或不可读");
+                throw new BadRequestException("File does not exist or is unreadable");
             }
             return resource;
         } catch (MalformedURLException e) {
-            throw new BadRequestException("文件路径错误");
+            throw new BadRequestException("File path error");
         }
     }
 
