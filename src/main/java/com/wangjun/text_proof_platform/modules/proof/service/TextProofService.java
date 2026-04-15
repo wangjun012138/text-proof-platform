@@ -66,25 +66,31 @@ public class TextProofService {
     @Transactional
     public Long createFileProof(String subject, MultipartFile file, String ownerUsername) throws IOException {
         ProofStorageService.StoredFile storedFile = proofStorageService.store(file);
+        try {
+            TextProof proof = new TextProof();
+            proof.setOwnerUsername(ownerUsername);
+            proof.setSubject(subject);
+            proof.setContentType("FILE");
+            proof.setTextContent(null);
+            proof.setFilePath(storedFile.getRelativePath());
+            proof.setOriginalFilename(storedFile.getOriginalFilename());
+            proof.setFileSize(storedFile.getFileSize());
+            proof.setMimeType(storedFile.getMimeType());
 
-        TextProof proof = new TextProof();
-        proof.setOwnerUsername(ownerUsername);
-        proof.setSubject(subject);
-        proof.setContentType("FILE");
-        proof.setTextContent(null);
-        proof.setFilePath(storedFile.getRelativePath());
-        proof.setOriginalFilename(storedFile.getOriginalFilename());
-        proof.setFileSize(storedFile.getFileSize());
-        proof.setMimeType(storedFile.getMimeType());
+            byte[] digest = proofHashService.digest(storedFile.getBytes());
+            proof.setContentHash(proofHashService.sha256Hex(storedFile.getBytes()));
 
-        byte[] digest = proofHashService.digest(storedFile.getBytes());
-        proof.setContentHash(proofHashService.sha256Hex(storedFile.getBytes()));
+            TimestampResult timestampResult = rfc3161TimestampService.timestamp(digest);
+            applyTimestampResult(proof, timestampResult);
 
-        TimestampResult timestampResult = rfc3161TimestampService.timestamp(digest);
-        applyTimestampResult(proof, timestampResult);
-
-        textProofRepository.save(proof);
-        return proof.getId();
+            proof.setVersionNo(1);
+            textProofRepository.save(proof);
+            saveAuditSnapshot(proof, "CREATED");
+            return proof.getId();
+        } catch (RuntimeException e) {
+            proofStorageService.deleteStoredFile(storedFile.getRelativePath());
+            throw e;
+        }
     }
     //查当前用户自己的存证列表
     @Transactional(readOnly = true)
@@ -140,10 +146,10 @@ public class TextProofService {
         applyTimestampResult(proof, timestampResult);
 
 
-        textProofRepository.saveAndFlush(proof);
-
         //存证版本更新
         proof.setVersionNo(proof.getVersionNo() + 1);
+        textProofRepository.saveAndFlush(proof);
+
         saveAuditSnapshot(proof, "UPDATED");
 
         if (oldWasFile) {
@@ -178,10 +184,9 @@ public class TextProofService {
 
             TimestampResult timestampResult = rfc3161TimestampService.timestamp(digest);
             applyTimestampResult(proof, timestampResult);
-
-            textProofRepository.saveAndFlush(proof);
             //存证版本更新
             proof.setVersionNo(proof.getVersionNo() + 1);
+            textProofRepository.saveAndFlush(proof);
             saveAuditSnapshot(proof, "UPDATED");
             // 3. 数据库成功后，再删旧文件
             if (oldWasFile) {
@@ -216,11 +221,14 @@ public class TextProofService {
     //查看历史版本
     @Transactional(readOnly = true)
     public List<TextProofAudit> getProofHistory(Long id, String ownerUsername) {
-        // 先确认这条 proof 属于当前用户
-        getOwnedProof(id, ownerUsername);
 
-        return textProofAuditRepository
-                .findAllByProofIdAndOwnerUsernameOrderByVersionNoAsc(id, ownerUsername);
+        List<TextProofAudit> audits =
+                textProofAuditRepository.findAllByProofIdAndOwnerUsernameOrderByVersionNoAsc(id, ownerUsername);
+
+        if (audits.isEmpty()) {
+            throw new ResourceNotFoundException("Proof history not found");
+        }
+        return audits;
     }
     //保存审计快照
     private void saveAuditSnapshot(TextProof proof, String action) {

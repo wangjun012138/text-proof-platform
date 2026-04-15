@@ -2,10 +2,13 @@ package com.wangjun.text_proof_platform.modules.user.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.wangjun.text_proof_platform.common.GlobalExceptionHandler;
+import com.wangjun.text_proof_platform.common.TooManyLoginAttemptsException;
 import com.wangjun.text_proof_platform.config.SecurityConfig;
 import com.wangjun.text_proof_platform.modules.user.entity.User;
 import com.wangjun.text_proof_platform.modules.user.service.AuthService;
+import com.wangjun.text_proof_platform.modules.user.service.LoginThrottleService;
 import com.wangjun.text_proof_platform.modules.user.service.UserSessionService;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
@@ -17,13 +20,17 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import static org.hamcrest.Matchers.isEmptyOrNullString;
 import static org.hamcrest.Matchers.not;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -42,6 +49,17 @@ class AuthControllerTest {
 
     @MockBean
     private UserSessionService userSessionService;
+
+    @MockBean
+    private LoginThrottleService loginThrottleService;
+
+    @BeforeEach
+    void setUp() {
+        when(authService.normalizeAccount(anyString()))
+                .thenAnswer(invocation -> invocation.getArgument(0, String.class).trim());
+        when(loginThrottleService.extractClientIp(any()))
+                .thenReturn("127.0.0.1");
+    }
 
     @Test
     void csrfShouldReturnTokenPayload() throws Exception {
@@ -70,6 +88,8 @@ class AuthControllerTest {
                 .andExpect(jsonPath("$.message").value("Login succeeded"))
                 .andExpect(jsonPath("$.data").value(42L));
 
+        verify(loginThrottleService).assertAllowed("demo", "127.0.0.1");
+        verify(loginThrottleService).recordSuccess("demo", "127.0.0.1");
         verify(userSessionService).registerCurrentSession(eq("demo"), anyString());
     }
 
@@ -86,6 +106,29 @@ class AuthControllerTest {
                 .andExpect(jsonPath("$.code").value(401))
                 .andExpect(jsonPath("$.message").value("Invalid credentials"))
                 .andExpect(jsonPath("$.data").isEmpty());
+
+        verify(loginThrottleService).recordFailure("demo", "127.0.0.1");
+        verify(loginThrottleService, never()).recordSuccess(anyString(), anyString());
+    }
+
+    @Test
+    void loginShouldReturnTooManyRequestsWhenThrottled() throws Exception {
+        doThrow(new TooManyLoginAttemptsException("Too many attempts. Please try again later", 60))
+                .when(loginThrottleService)
+                .assertAllowed("demo", "127.0.0.1");
+
+        mockMvc.perform(post("/api/auth/login")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(new LoginPayload("demo", "secret"))))
+                .andExpect(status().isTooManyRequests())
+                .andExpect(header().string("Retry-After", "60"))
+                .andExpect(jsonPath("$.code").value(429))
+                .andExpect(jsonPath("$.message").value("Too many attempts. Please try again later"))
+                .andExpect(jsonPath("$.data").isEmpty());
+
+        verify(loginThrottleService, never()).recordFailure(anyString(), anyString());
+        verify(loginThrottleService, never()).recordSuccess(anyString(), anyString());
     }
 
     @Test

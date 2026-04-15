@@ -7,6 +7,7 @@ import com.wangjun.text_proof_platform.modules.user.dto.RegisterRequest;
 import com.wangjun.text_proof_platform.modules.user.dto.ResetPwdRequest;
 import com.wangjun.text_proof_platform.modules.user.entity.User;
 import com.wangjun.text_proof_platform.modules.user.service.AuthService;
+import com.wangjun.text_proof_platform.modules.user.service.LoginThrottleService;
 import com.wangjun.text_proof_platform.modules.user.service.UserSessionService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -14,6 +15,7 @@ import jakarta.servlet.http.HttpSession;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
+import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.http.HttpStatus;
@@ -39,15 +41,18 @@ public class AuthController {
     private final AuthService authService;
     private final UserSessionService userSessionService;
     private final SecurityContextRepository securityContextRepository;
-
+    private final LoginThrottleService loginThrottleService;
 
 
     public AuthController(AuthService authService,
                           UserSessionService userSessionService,
-                          SecurityContextRepository securityContextRepository) {
+                          SecurityContextRepository securityContextRepository,
+                          LoginThrottleService loginThrottleService
+    ) {
         this.authService = authService;
         this.userSessionService = userSessionService;
         this.securityContextRepository = securityContextRepository;
+        this.loginThrottleService = loginThrottleService;
     }
 
     @GetMapping("/csrf")
@@ -66,55 +71,65 @@ public class AuthController {
                                    HttpServletRequest request,
                                    //response:如果要回写 cookie / session 信息，往哪里写
                                    HttpServletResponse response) {
+        //标准化用户名
+        String normalizedAccount = authService.normalizeAccount(req.getAccount());
+        //提取ip地址
+        String clientIp = loginThrottleService.extractClientIp(request);
+        //1.登录前先检查是否已被限流
+        loginThrottleService.assertAllowed(normalizedAccount, clientIp);
 
-        // 1. 先做你自己的账号密码校验
-        User user = authService.login(req.getAccount(), req.getPassword());
-        // 1. 登录成功后轮换 Session ID，防止会话固定攻击
-        //攻击者可能先想办法让受害者带着一个已知的 Session ID 访问你的网站。
-        //如果受害者登录后，服务器还继续沿用这个旧 Session ID，攻击者就可能利用这个已知 ID 冒充受害者。
+        try {
+            // 2. 账号密码校验
+            User user = authService.login(normalizedAccount, req.getPassword());
 
-        // 2. 先确保当前请求已经有 session
-        request.getSession(true);
+            // 3. 登录成功后沿用你当前已有的 session / security 逻辑
+            //登录成功后轮换 Session ID，防止会话固定攻击
+            //攻击者可能先想办法让受害者带着一个已知的 Session ID 访问你的网站。
+            //如果受害者登录后，服务器还继续沿用这个旧 Session ID，攻击者就可能利用这个已知 ID 冒充受害者。
+            //先确保当前请求已经有 session
+            request.getSession(true);
+            //登录成功后轮换 Session ID，防止会话固定攻击
+            request.changeSessionId();
+            //拿到轮换后的当前 session
+            HttpSession session = request.getSession(false);
+            if (session == null) {
+                throw new IllegalStateException("Failed to create a valid session after successful login");
+            }
+            // 创建当前用户的安全身份对象;包含
+            //用户是谁
+            //凭证（密码等）
+            //权限/角色有哪些
+            //当前是否已认证
+            Authentication authentication = new UsernamePasswordAuthenticationToken(
+                    user.getUsername(),
+                    null,
+                    AuthorityUtils.createAuthorityList("ROLE_USER")
+            );
+            //创建SecurityContext，把“当前用户已经登录”这件事写进
+            SecurityContext context = SecurityContextHolder.createEmptyContext();
+            context.setAuthentication(authentication);
+            SecurityContextHolder.setContext(context);
 
-        // 3. 登录成功后轮换 Session ID，防止会话固定攻击
-        request.changeSessionId();
+            // 用 SecurityContextRepository 保存上下文，而不是自己手工 setAttribute
+            securityContextRepository.saveContext(context, request, response);
 
-        // 4. 拿到轮换后的当前 session
-        HttpSession session = request.getSession(false);
+            //在 SessionRegistry 中登记当前新 session
+            String currentSessionId = session.getId();
+            userSessionService.registerCurrentSession(user.getUsername(), currentSessionId);
 
-        if (session == null) {
-            throw new IllegalStateException("Failed to create a valid session after successful login");
+            //把同账号其他旧 session 全部标记为过期，只保留当前新 session
+            userSessionService.expireOtherSessions(user.getUsername(), currentSessionId);
+
+            // 4. 登录成功，自动清空账号/IP 的节流状态
+            loginThrottleService.recordSuccess(normalizedAccount, clientIp);
+
+            return ApiResponse.success("Login succeeded", user.getId());
+        } catch (BadCredentialsException e) {
+            // 5. 只有账号密码错误时，才累计失败次数
+            loginThrottleService.recordFailure(normalizedAccount, clientIp);
+            throw e;
         }
 
-        // 2. 创建当前用户的安全身份对象;包含
-        //用户是谁
-        //凭证（密码等）
-        //权限/角色有哪些
-        //当前是否已认证
-        Authentication authentication =
-                new UsernamePasswordAuthenticationToken(
-                user.getUsername(),
-                null,//credentials(凭证),比如密码
-                AuthorityUtils.createAuthorityList("ROLE_USER")//表示给当前用户分配一个角色
-        );
-
-        //创建SecurityContext，把“当前用户已经登录”这件事写进
-        SecurityContext context = SecurityContextHolder.createEmptyContext();
-
-        context.setAuthentication(authentication);
-        SecurityContextHolder.setContext(context);
-        // 7. 用 SecurityContextRepository 保存上下文，而不是自己手工 setAttribute
-        securityContextRepository.saveContext(context, request, response);
-
-        // 8. 在 SessionRegistry 中登记当前新 session
-        String currentSessionId = session.getId();
-
-        userSessionService.registerCurrentSession(user.getUsername(), currentSessionId);
-
-        // 9. 把同账号其他旧 session 全部标记为过期，只保留当前新 session
-        userSessionService.expireOtherSessions(user.getUsername(), currentSessionId);
-
-        return ApiResponse.success("Login succeeded", user.getId());
     }
 
     @PostMapping("/code")
