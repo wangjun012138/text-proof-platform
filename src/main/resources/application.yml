@@ -25,3 +25,22 @@ proof:
 
 server:
   port: 8080
+
+  # 关键：只监听本机地址，禁止公网直接访问 8080
+  # 前提：Nginx 和 Spring Boot 在同一台机器上
+  address: 127.0.0.1
+
+  # 关键：让 Spring Boot 识别 Nginx 传来的 X-Forwarded-* 头
+  forward-headers-strategy: framework
+
+  servlet:
+    session:
+      cookie:
+        # JSESSIONID 只能通过 HTTPS 发送
+        secure: true
+
+        # JS 不能读取 JSESSIONID，防止 XSS 直接偷 Session
+        http-only: true
+
+        # 降低 CSRF 风险；如果前后端完全跨站，可能要改成 None + Secure
+        same-site: Lax

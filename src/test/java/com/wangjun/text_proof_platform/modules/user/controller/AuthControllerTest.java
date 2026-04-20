@@ -63,13 +63,21 @@ class AuthControllerTest {
 
     @Test
     void csrfShouldReturnTokenPayload() throws Exception {
-        mockMvc.perform(get("/api/auth/csrf"))
+        mockMvc.perform(get("/api/auth/csrf")
+                        .secure(true))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(200))
                 .andExpect(jsonPath("$.message").value("CSRF token generated"))
                 .andExpect(jsonPath("$.data.headerName", not(isEmptyOrNullString())))
                 .andExpect(jsonPath("$.data.parameterName").value("_csrf"))
                 .andExpect(jsonPath("$.data.token", not(isEmptyOrNullString())));
+    }
+
+    @Test
+    void httpRequestsShouldRedirectToHttps() throws Exception {
+        mockMvc.perform(get("/api/auth/csrf"))
+                .andExpect(status().isFound())
+                .andExpect(header().string("Location", "https://localhost/api/auth/csrf"));
     }
 
     @Test
@@ -80,6 +88,7 @@ class AuthControllerTest {
         when(authService.login("demo", "secret")).thenReturn(user);
 
         mockMvc.perform(post("/api/auth/login")
+                        .secure(true)
                         .with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(new LoginPayload("demo", "secret"))))
@@ -99,6 +108,7 @@ class AuthControllerTest {
                 .thenThrow(new BadCredentialsException("Invalid credentials"));
 
         mockMvc.perform(post("/api/auth/login")
+                        .secure(true)
                         .with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(new LoginPayload("demo", "wrong"))))
@@ -118,6 +128,7 @@ class AuthControllerTest {
                 .assertAllowed("demo", "127.0.0.1");
 
         mockMvc.perform(post("/api/auth/login")
+                        .secure(true)
                         .with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(new LoginPayload("demo", "secret"))))
@@ -134,6 +145,7 @@ class AuthControllerTest {
     @Test
     void loginShouldReturnBadRequestWhenAccountBlank() throws Exception {
         mockMvc.perform(post("/api/auth/login")
+                        .secure(true)
                         .with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(new LoginPayload(" ", "secret"))))
@@ -145,6 +157,7 @@ class AuthControllerTest {
     @Test
     void loginShouldReturnForbiddenJsonWhenCsrfTokenMissing() throws Exception {
         mockMvc.perform(post("/api/auth/login")
+                        .secure(true)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(new LoginPayload("demo", "secret"))))
                 .andExpect(status().isForbidden())
@@ -156,6 +169,7 @@ class AuthControllerTest {
     @Test
     void loginShouldReturnBadRequestWhenRequestBodyMalformed() throws Exception {
         mockMvc.perform(post("/api/auth/login")
+                        .secure(true)
                         .with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"account\":\"demo\",\"password\":"))
@@ -168,6 +182,7 @@ class AuthControllerTest {
     @Test
     void changePasswordShouldReturnUnauthorizedJsonWhenAnonymous() throws Exception {
         mockMvc.perform(post("/api/auth/password/change")
+                        .secure(true)
                         .with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""

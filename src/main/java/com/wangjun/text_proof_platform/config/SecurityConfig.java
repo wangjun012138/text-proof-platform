@@ -44,6 +44,20 @@ public class SecurityConfig {
             SecurityContextRepository securityContextRepository
     ) throws Exception {
         http
+                // 生产环境建议强制所有请求必须是 HTTPS
+                // 如果请求不是 HTTPS，Spring Security 会重定向到 HTTPS
+                .requiresChannel(channel -> channel
+                        .anyRequest().requiresSecure()
+                )
+
+                // 安全响应头：告诉浏览器以后优先使用 HTTPS
+                .headers(headers -> headers
+                        .httpStrictTransportSecurity(hsts -> hsts
+                                .includeSubDomains(true)
+                                .preload(true)
+                                .maxAgeInSeconds(31536000)
+                        )
+                )
                 //CookieCsrfTokenRepository表示把 CSRF Token 存到 Cookie 中。
                 //withHttpOnlyFalse()表示这个 Cookie 不设置 HttpOnly=true，也就是：前端 JS 可以读到这个 Cookie。
                 .csrf(csrf -> csrf.

@@ -9,10 +9,11 @@ import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 import java.util.OptionalInt;
 import java.util.concurrent.ConcurrentHashMap;
-
+import org.springframework.security.web.util.matcher.IpAddressMatcher;
     @Service
     public class LoginThrottleService {
 
@@ -178,51 +179,81 @@ import java.util.concurrent.ConcurrentHashMap;
             }
             return clientIp.trim();
         }
+
         //从请求头 X-Forwarded-For 里，取出第一个有效的客户端 IP
-        private String extractForwardedFor(String forwardedForHeader) {
+        private String extractForwardedFor(String header) {
             //先判断请求头有没有内容
-            if (!StringUtils.hasText(forwardedForHeader)) {
+            if (!StringUtils.hasText(header)) {
                 return "";
             }
+
             //X-Forwarded-For 头通常可能包含多个 IP,
-            String[] candidates = forwardedForHeader.split(",");
-            //逐个遍历候选 IP
-            for (String candidate : candidates) {
-                //对每个候选 IP 做规范化
-                String normalized = normalizeForwardedIp(candidate);
-                //这个值不能为空，也不能全是空格 && 如果这个值是 "unknown"，也不算有效 IP
-                if (StringUtils.hasText(normalized) && !"unknown".equalsIgnoreCase(normalized)) {
-                    //返回第一个有效的 IP
-                    return normalized;
+            String[] parts = header.split(",");
+            for (int i = parts.length - 1; i >= 0; i--) {
+                //过滤非法 IP
+                String ip = normalizeAndValidateIp(parts[i]);
+                if (!StringUtils.hasText(ip)) {
+                    continue;
+                }
+                //跳过可信代理，返回第一个非可信 IP
+                if (!isTrustedProxy(ip)) {
+                    return ip;
                 }
             }
             return "";
         }
-        //简单清理 IP 字符串
-        private String normalizeForwardedIp(String rawIp) {
-            if (!StringUtils.hasText(rawIp)) {
+        //清理并校验 IP
+        private String normalizeAndValidateIp(String raw) {
+            if (!StringUtils.hasText(raw)) {
                 return "";
             }
-            //rawIp.trim()把字符串首尾的空白字符去掉。
-            return rawIp.trim();
+            //去掉前后空格
+            String candidate = raw.trim();
+            if ("unknown".equalsIgnoreCase(candidate) || !looksLikeIpLiteral(candidate)) {
+                return "";
+            }
+            //尝试解析为 IP
+            try {
+                return InetAddress.getByName(candidate).getHostAddress();
+            } catch (UnknownHostException ex) {
+                return "";
+            }
         }
+        //只接受 IP 字面量，避免把主机名当成 IP 并触发 DNS 解析
+        private boolean looksLikeIpLiteral(String candidate) {
+            if (candidate.contains(":")) {
+                return candidate.matches("[0-9a-fA-F:.]+");
+            }
+            return candidate.matches(
+                    "((25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)\\.){3}"
+                            + "(25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)"
+            );
+        }
+        //简单清理 IP 字符串
+        private String normalizeForwardedIp(String rawIp) {
+            return normalizeAndValidateIp(rawIp);
+        }
+        //可信代理列表
+        private final List<IpAddressMatcher> trustedProxyMatchers = List.of(
+                new IpAddressMatcher("127.0.0.1/32"),
+                new IpAddressMatcher("::1/128"),
+                new IpAddressMatcher("10.10.0.0/16")
+        );
+
         //判断当前请求直接连接过来的这个 IP，是不是一个“可信代理”地址。
         private boolean isTrustedProxy(String remoteAddr) {
-            //先排除空值和 "unknown"
-            if (!StringUtils.hasText(remoteAddr) || "unknown".equalsIgnoreCase(remoteAddr)) {
+            //空值判断
+            if (!StringUtils.hasText(remoteAddr)) {
                 return false;
             }
+
             try {
-                //把字符串 IP 解析成 InetAddress
+                //把字符串 IP 转成标准 IP
                 InetAddress address = InetAddress.getByName(remoteAddr);
-                //是否是“任意本地地址”
-                // 是否是回环地址
-                // 是否是链路本地地址
-                // 是否是站点本地地址，也就是常说的内网地址 / 私有地址
-                return address.isAnyLocalAddress()
-                        || address.isLoopbackAddress()
-                        || address.isLinkLocalAddress()
-                        || address.isSiteLocalAddress();
+                String normalizedIp = address.getHostAddress();
+                //判断是否命中可信代理范围
+                return trustedProxyMatchers.stream()
+                        .anyMatch(matcher -> matcher.matches(normalizedIp));
             } catch (UnknownHostException ex) {
                 return false;
             }
