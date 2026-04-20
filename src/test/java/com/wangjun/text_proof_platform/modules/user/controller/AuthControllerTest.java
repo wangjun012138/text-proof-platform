@@ -197,6 +197,42 @@ class AuthControllerTest {
                 .andExpect(jsonPath("$.data").isEmpty());
     }
 
+    @Test
+    void resetPasswordShouldRejectNonNumericCode() throws Exception {
+        mockMvc.perform(post("/api/auth/password/reset")
+                        .secure(true)
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "email": "demo@example.com",
+                                  "code": "abcdef",
+                                  "newPassword": "New123"
+                                }
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(400))
+                .andExpect(jsonPath("$.message").value("Verification code must contain only numbers"));
+    }
+
+    @Test
+    void resetPasswordShouldRejectOverlongPassword() throws Exception {
+        mockMvc.perform(post("/api/auth/password/reset")
+                        .secure(true)
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "email": "demo@example.com",
+                                  "code": "123456",
+                                  "newPassword": "A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1"
+                                }
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(400))
+                .andExpect(jsonPath("$.message").value("Password length must be between 6 and 50 characters"));
+    }
+
     private record LoginPayload(String account, String password) {
     }
 }

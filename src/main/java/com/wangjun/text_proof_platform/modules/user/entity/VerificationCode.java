@@ -24,6 +24,11 @@ public class VerificationCode {
     //验证码是否被使用
     @Column(nullable = false)
     private boolean used = false;
+
+    // 验证码已经输错的次数
+    @Column(name = "attempt_count", nullable = false)
+    private int attemptCount = 0;
+
     @Column(name = "create_at",nullable = false)
     private LocalDateTime createdAt;
     @PrePersist
