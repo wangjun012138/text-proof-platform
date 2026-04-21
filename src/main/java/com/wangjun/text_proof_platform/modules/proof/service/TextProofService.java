@@ -2,6 +2,7 @@ package com.wangjun.text_proof_platform.modules.proof.service;
 
 import com.wangjun.text_proof_platform.common.BadRequestException;
 import com.wangjun.text_proof_platform.common.ResourceNotFoundException;
+import com.wangjun.text_proof_platform.modules.audit.service.AuditLogAsyncService;
 import com.wangjun.text_proof_platform.modules.proof.dto.TextProofDetailResponse;
 import com.wangjun.text_proof_platform.modules.proof.dto.TextProofListItemResponse;
 import com.wangjun.text_proof_platform.modules.proof.entity.TextProof;
@@ -13,7 +14,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
-
+import com.wangjun.text_proof_platform.modules.audit.model.AuditEvent;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import com.wangjun.text_proof_platform.modules.share.repository.TextProofShareRepository;
 import java.io.IOException;
 import java.time.LocalDateTime;
@@ -28,12 +31,14 @@ public class TextProofService {
     private final Rfc3161TimestampService rfc3161TimestampService;
     private final TextProofShareRepository textProofShareRepository;
     private final TextProofAuditRepository textProofAuditRepository;
+    private final AuditLogAsyncService auditLogAsyncService;
     public TextProofService(TextProofRepository textProofRepository,
                             ProofHashService proofHashService,
                             ProofStorageService proofStorageService,
                             Rfc3161TimestampService rfc3161TimestampService,
                             TextProofShareRepository textProofShareRepository,
-                            TextProofAuditRepository textProofAuditRepository
+                            TextProofAuditRepository textProofAuditRepository,
+                            AuditLogAsyncService auditLogAsyncService
     ) {
         this.textProofRepository = textProofRepository;
         this.proofHashService = proofHashService;
@@ -41,6 +46,7 @@ public class TextProofService {
         this.rfc3161TimestampService = rfc3161TimestampService;
         this.textProofShareRepository = textProofShareRepository;
         this.textProofAuditRepository = textProofAuditRepository;
+        this.auditLogAsyncService = auditLogAsyncService;
     }
     //创建短文本存证
     @Transactional
@@ -60,6 +66,18 @@ public class TextProofService {
         proof.setVersionNo(1);
         textProofRepository.save(proof);
         saveAuditSnapshot(proof, "CREATED");
+        //
+        publishAuditAfterCommit(new AuditEvent(
+                ownerUsername,
+                "PROOF_CREATE",
+                "PROOF",
+                proof.getId(),
+                "SUCCESS",
+                null,
+                "用户创建文本存证",
+                LocalDateTime.now()
+        ));
+
         return proof.getId();
     }
     //创建文件存证
@@ -86,6 +104,18 @@ public class TextProofService {
             proof.setVersionNo(1);
             textProofRepository.save(proof);
             saveAuditSnapshot(proof, "CREATED");
+
+            publishAuditAfterCommit(new AuditEvent(
+                    ownerUsername,
+                    "PROOF_FILE_CREATE",
+                    "PROOF",
+                    proof.getId(),
+                    "SUCCESS",
+                    null,
+                    "用户创建文件存证：" + proof.getOriginalFilename(),
+                    LocalDateTime.now()
+            ));
+
             return proof.getId();
         } catch (RuntimeException e) {
             proofStorageService.deleteStoredFile(storedFile.getRelativePath());
@@ -117,6 +147,17 @@ public class TextProofService {
             throw new ResourceNotFoundException("File not found");
         }
         Resource resource = proofStorageService.loadAsResource(proof.getFilePath());
+
+        publishAuditAfterCommit(new AuditEvent(
+                ownerUsername,
+                "PROOF_DOWNLOAD",
+                "PROOF",
+                proof.getId(),
+                "SUCCESS",
+                null,
+                "用户下载文件存证：" + proof.getOriginalFilename(),
+                LocalDateTime.now()
+        ));
         return new DownloadedFile(
                 proof.getOriginalFilename(),
                 proof.getMimeType(),
@@ -152,6 +193,16 @@ public class TextProofService {
 
         saveAuditSnapshot(proof, "UPDATED");
 
+        publishAuditAfterCommit(new AuditEvent(
+                ownerUsername,
+                "PROOF_UPDATE_TEXT",
+                "PROOF",
+                proof.getId(),
+                "SUCCESS",
+                null,
+                "用户将存证更新为文本内容，version=" + proof.getVersionNo(),
+                LocalDateTime.now()
+        ));
         if (oldWasFile) {
             proofStorageService.deleteStoredFile(oldFilePath);
         }
@@ -188,6 +239,16 @@ public class TextProofService {
             proof.setVersionNo(proof.getVersionNo() + 1);
             textProofRepository.saveAndFlush(proof);
             saveAuditSnapshot(proof, "UPDATED");
+            publishAuditAfterCommit(new AuditEvent(
+                    ownerUsername,
+                    "PROOF_UPDATE_FILE",
+                    "PROOF",
+                    proof.getId(),
+                    "SUCCESS",
+                    null,
+                    "用户将存证更新为文件：" + proof.getOriginalFilename() + "，version=" + proof.getVersionNo(),
+                    LocalDateTime.now()
+            ));
             // 3. 数据库成功后，再删旧文件
             if (oldWasFile) {
                 proofStorageService.deleteStoredFile(oldFilePath);
@@ -217,6 +278,16 @@ public class TextProofService {
         }
 
         textProofRepository.delete(proof);
+        publishAuditAfterCommit(new AuditEvent(
+                ownerUsername,
+                "PROOF_DELETE",
+                "PROOF",
+                id,
+                "SUCCESS",
+                null,
+                "用户删除存证：" + proof.getSubject(),
+                LocalDateTime.now()
+        ));
     }
     //查看历史版本
     @Transactional(readOnly = true)
@@ -299,6 +370,25 @@ public class TextProofService {
                 proof.getRfc3161Provider(),
                 proof.getRfc3161TimestampAt()
         );
+    }
+    /**
+     * 事务提交成功后，再把审计事件放入异步队列。
+     *
+     * 原因：
+     * 如果业务事务最后回滚了，但日志已经异步写入，就会出现：
+     * “数据库没有创建成功，但审计日志里显示创建成功”的不一致问题。
+     */
+    private void publishAuditAfterCommit(AuditEvent event) {
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    auditLogAsyncService.publish(event);
+                }
+            });
+        } else {
+            auditLogAsyncService.publish(event);
+        }
     }
     //把原文件名、文件类型、文件本体这三个相关信息封装成一个新的对象，方便方法一次性返回。
     public record DownloadedFile(String originalFilename, String mimeType, Resource resource) {
